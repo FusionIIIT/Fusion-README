@@ -4,7 +4,7 @@
 >
 > | You are on | Follow |
 > |---|---|
-> | **Windows** | [QUICKSTART.md](QUICKSTART.md) — step 0 installs Ubuntu, the rest runs inside it |
+> | **Windows** | [QUICKSTART.md](QUICKSTART.md) — step 0 installs Ubuntu environment via wsl, the rest runs inside it |
 > | **Ubuntu, WSL or other Linux** | [QUICKSTART.md](QUICKSTART.md) |
 > | **macOS** | [QUICKSTART-macOS.md](QUICKSTART-macOS.md) |
 >
