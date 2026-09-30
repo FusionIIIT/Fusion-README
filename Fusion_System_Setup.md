@@ -109,6 +109,12 @@ Four things running at once:
 **The IAM must be running or nothing else works.** Everything asks it on every
 request.
 
+That set is enough to build and test a module. It is **not** what a student sees.
+The portal — the legacy `Fusion` backend and the `Fusion-client` React app — is the
+shell every module renders inside, and it owns the sidebar, the header and the role
+switcher. Add it when you need to see your module the way it ships, in
+[Step 6](#step-6--the-portal-optional-until-you-need-the-real-sidebar).
+
 A server command never finishes — that is what running means. Open a **new**
 terminal for the next step instead of pressing `Ctrl+C`.
 
@@ -514,9 +520,14 @@ EOF
 - **`DB_NAME` is `fusion_integrated`, not `fusionlab`.** Placement is new work
   the old system knows nothing about. Point it at `fusionlab` and `make migrate`
   will quietly create placement tables inside the ERP's database.
-- **`IAM_AUTH_COOKIE_NAME` must differ from the IAM's `auth_token`.** Two
-  services sharing a cookie name means logging into one logs you out of the
-  other.
+- **`IAM_AUTH_COOKIE_NAME` is how one login reaches every service, so the rule is
+  not "make it unique".** The portal mints an IAM session under this name and
+  Fusion-Integrated reads it, so **those two must match exactly** or the walk-across
+  fails silently and the module asks you to log in again. What must *not* collide is
+  the IAM admin console, which sets `auth_token` at path `/`: give the console
+  `AUTH_COOKIE_PATH=/sysadmin/`, or set this to `fusion_session` in both the portal
+  and Fusion-Integrated. Sharing the console's name at the same path means logging
+  into one logs you out of the other.
 
 ### 5.2 Run it
 
@@ -607,55 +618,58 @@ curl -s http://127.0.0.1:8001/api/iam/v1/me -H "Authorization: Token $TOKEN" \
 
 ---
 
-## Step 6 — Fusion-Academic (optional)
+## Step 6 — The portal (optional until you need the real sidebar)
 
-**Not published yet.** It exists only on the machines it was built on, so there
-is nothing to fork. Skip this unless you were given a copy.
+Steps 3–5 give you a module and its own development interface. They do not give
+you what a student sees. The **portal** is the shell: the legacy `Fusion` backend
+plus the `Fusion-client` React app, which owns the sidebar, the header, the role
+switcher and the profile. Your module contributes pages into it and nothing else.
 
-```bash
-cd $FUSION/Fusion-Academic
-make install
-cd client && npm install && cd ..
-
-cat > .env <<EOF
-DJANGO_SETTINGS_MODULE=config.settings.dev
-
-DB_NAME=fusionlab
-DB_USER=fusion_admin
-DB_PASSWORD=$PGPASSWORD
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_CONN_MAX_AGE=0
-
-ACADEMIC_SCHEMA=academic
-
-IAM_BASE_URL=http://127.0.0.1:8001
-IAM_API_PREFIX=/api
-IAM_SERVICE_TOKEN=$TOKEN
-IAM_TIMEOUT_SECONDS=5
-IAM_SESSION_CACHE_SECONDS=60
-IAM_AUTH_COOKIE_NAME=academic_session
-
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
-DJANGO_CORS_ALLOWED_ORIGINS=http://localhost:5174
-EOF
-
-make rebuild
-make dev
-```
-
-This one **does** use `fusionlab`.
-
-`make rebuild` creates the `academic` schema, migrates, rebuilds the grade store
-and verifies it. **Run it again after every database refresh** — a dump of
-`public` does not carry the `academic` schema, so migrations read as unapplied
-and the first write fails. That is expected, not a fault.
-
-Web interface, in a new terminal:
+Set this up when you need to check how your module appears in the sidebar, that it
+reaches the right roles, or that one login carries across. Skip it while you are
+writing domain logic and tests — the suite needs none of it.
 
 ```bash
-cd $FUSION/Fusion-Academic/client && npm run dev -- --port 5174
+cd $FUSION
+gh repo fork FusionIIIT/Fusion --clone
+gh repo fork FusionIIIT/Fusion-client --clone
 ```
+
+**The backend**, which serves `fusionlab` and mints an IAM session beside its own:
+
+```bash
+cd $FUSION/Fusion/FusionIIIT
+python3.9 -m venv ../venv
+../venv/bin/pip install -r ../requirements.txt
+
+export IAM_BASE_URL=http://127.0.0.1:8001
+export IAM_AUTH_COOKIE_NAME=auth_token      # must equal Fusion-Integrated's
+
+../venv/bin/python manage.py runserver 127.0.0.1:8000
+```
+
+- **This one uses `fusionlab`**, the database you restored in Step 1. It is the old
+  monolith and it owns that data — there is nothing to migrate and nothing to seed.
+- **Python 3.9**, not 3.12. This is Django 3.1 and will not install on newer.
+- The IAM bridge is configured entirely from the environment, so no settings file is
+  touched. If the IAM is down the portal still logs you in — you simply do not get
+  the plugged modules until it is back.
+
+**The web interface**, in a new terminal:
+
+```bash
+cd $FUSION/Fusion-client
+npm install
+npm run dev
+```
+
+Open the port it prints — 5173, or 5174 if Fusion-Integrated's own client already
+has it. Sign in with the same ERP accounts (`stu00001` / `fusion123`).
+
+**You should see** your module in the sidebar under its own section, expanding into
+the screens that role is granted — drawn by the portal, served by your service. If
+the section is missing, check the grant before the frontend: only the designations
+in your module's `ROLE_GRANTS` see it, and only after Step 5.3 has run.
 
 ---
 
@@ -713,6 +727,13 @@ perfectly healthy system, because only placement is mapped so far.
 Start window 1 first — the others depend on it. On Windows these are three
 Ubuntu (WSL) windows.
 
+With the portal from Step 6, two more:
+
+| Window | Folder | Command |
+|---|---|---|
+| 4 | `Fusion/FusionIIIT` | `../venv/bin/python manage.py runserver 127.0.0.1:8000` |
+| 5 | `Fusion-client` | `npm run dev` |
+
 ---
 
 ## When something goes wrong
@@ -736,8 +757,9 @@ Ubuntu (WSL) windows.
 | `uv: command not found` | Install `uv` (Step 0), then re-run `make install` |
 | Port 5173 already in use | The admin console also defaults to it. Use `--port 5175` |
 | `relation "iam_…" does not exist` | `migrate --database system_db` was skipped |
-| `check_mirrors` says the schema does not exist | Database was refreshed. Run `make rebuild` |
 | A user has no roles | `sync_identity` has not run since they were created |
+| Your module is missing from the portal sidebar | That role is not in the module's `ROLE_GRANTS`, or Step 5.3 has not run since you changed it |
+| Logged into the portal, the module asks you to log in again | The portal and Fusion-Integrated disagree on `IAM_AUTH_COOKIE_NAME` — Step 5.1 |
 | `EBADENGINE` from npm | Node older than 20 |
 | `make: command not found` (Windows) | You are in PowerShell. Open the Ubuntu (WSL) window — Step 0 |
 | `make` runs but says `.venv/bin/python: No such file` (Windows) | Same cause. The Makefile is POSIX-only; use WSL |
@@ -749,8 +771,11 @@ Ubuntu (WSL) windows.
 
 ## The role catalogue
 
-`seed_iam_roles` loads the catalogue of which posts each kind of person may
-hold. Run it once, after `sync_identity`:
+Permissions decide what a post may do. The **catalogue** decides whether a person
+may hold that post at all — the live data has a student holding Dean Academic,
+which carries 54 permissions.
+
+Load it once, after `sync_identity`:
 
 ```bash
 cd $FUSION/Fusion_System_Administrator/Backend/backend
@@ -760,64 +785,71 @@ cd $FUSION/Fusion_System_Administrator/Backend/backend
 Leave `IAM_ENFORCE_ROLE_POLICY` at `False` to begin with. Anything the catalogue
 disagrees with is then written to `iam_role_violation` and reported, but still
 allowed. Switch it on only after reading that table, or you cut off access for
-whoever the catalogue is wrong about.
+whoever the catalogue is wrong about, with no warning.
 
-**Fusion-Academic** is not published yet, so there is no repository to fork.
-
----|---|---|
-| `seed_iam_permissions` | no arguments, list built into the command | `--manifest`, reads what the platform publishes |
-| `.env.example` | absent | present, and `cp .env.example .env` works |
-| `seed_iam_roles` | `Unknown command` | exists, with `IAM_ENFORCE_ROLE_POLICY` |
+`Unknown command: 'seed_iam_roles'` means an old checkout of the IAM — pull the
+latest. Check the file rather than asking Django, because `manage.py help` fails
+the same way whether a command is missing or your `.env` is:
 
 ```bash
 test -f $FUSION/Fusion_System_Administrator/Backend/backend/iam/management/commands/seed_iam_roles.py \
   && echo newer || echo older
 ```
 
-Checking for the file rather than asking Django is deliberate: `manage.py help`
-fails the same way whether a command is missing or your `.env` is, so it would
-report `older` on a perfectly new checkout with one typo in the config.
+---
 
-**On the older one**, Step 5.3's fallback is the command to use, and leave
-`IAM_ENFORCE_ROLE_POLICY` out of your `.env` — nothing reads it.
+## Where the data lives
 
-**On the newer one**, the role catalogue is available. It decides whether
-somebody *should* hold a post at all — the live data has a student holding Dean
-Academic, which carries 54 permissions. Load it once, after `sync_identity`:
+Three databases, and a module adds tables to exactly one of them.
 
-```bash
-./../venv/bin/python manage.py seed_iam_roles
-```
+| Database | Owns | A new module |
+|---|---|---|
+| `fusionlab` | every person, grade and registration, and which designations each person holds | never writes it |
+| `fusion_system_db` | **all access control** — designation → permission, designation → module, and the sidebar | adds rows through its manifest, never tables |
+| `fusion_integrated` | the modules' own business tables | adds its tables here |
 
-Leave `IAM_ENFORCE_ROLE_POLICY=False` to begin with. Violations are then written
-to `iam_role_violation` and reported but still allowed. Switch it on only after
-reading that table, or you revoke access from whoever the catalogue is wrong
-about, with no warning.
+Two things follow, and they are the two people get wrong:
 
-**Fusion-Academic** is not published at all yet — no repository to fork.
+- **A module never creates an access-control table.** No `Role`, no `Permission`,
+  no `UserRole`. Those exist once, in the IAM, and a module declares permissions in
+  its `registry.py` that `seed_iam_permissions` turns into rows there. Ten modules
+  means more rows, never more tables.
+- **Modules do not define roles.** Roles are institute-wide designations owned by
+  the ERP and mirrored in by `sync_identity`. A module only says which existing
+  designations hold which of its permissions. If a designation the spec needs does
+  not exist, the academic office creates it in the ERP — a module cannot invent one.
+
+The old portal and the new services **share `fusionlab`**: a grade saved by one
+shows up in the other, because it is the same table. That is deliberate, and it is
+why nothing copies it.
 
 ---
 
 ## About the main Fusion repository
 
-The old monolith owns the database. Its **code** is not needed — you never run
-`FusionIIIT/manage.py`.
+The old monolith owns the database, and it is also the portal — the shell your
+module renders inside. You need its code only for [Step 6](#step-6--the-portal-optional-until-you-need-the-real-sidebar);
+Steps 1–5 need the database alone.
 
-- **The old portal and the new services share one database.** A grade saved in
-  Fusion-Academic shows up in the old portal — same table.
-- **Do not modify that repository.** Only five of its apps are still in
-  production.
+**Do not modify that repository beyond the portal work.** Only five of its apps are
+still in production, and the rest are legacy awaiting deletion.
 
 ---
 
 ## For a real deployment
 
-1. **`sync_identity` runs on a timer**, every 5–15 minutes, not by hand.
+1. **`sync_identity` runs on a timer you install** — nothing in the service
+   schedules it. Units ship in `Backend/ops/systemd/`; see the IAM's
+   `DEPLOYMENT.md` §3b. Install the freshness timer alongside it, or a stopped
+   sync is silent until somebody complains that their new post does nothing.
 2. **Service tokens are mandatory** — production reads `IAM_SERVICE_TOKEN` with
    `os.environ[...]` and will not start without it.
 3. **`DEBUG=False`**, and every `.env` at mode `600`.
-4. **Leave `IAM_ENFORCE_ROLE_POLICY` off at first** once it exists. Let it record
-   problems, read them, then switch it on. Enforcing on day one revokes access
-   from anybody the catalogue is wrong about, silently.
-5. **`EXAMINATIONS_PROJECT_TO_LEGACY` stays `True`** while the old portal still
-   serves students, or they see no results there.
+4. **Leave `IAM_ENFORCE_ROLE_POLICY` off at first.** Let it record problems, read
+   them, then switch it on. Enforcing on day one revokes access from anybody the
+   catalogue is wrong about, silently.
+5. **`X_FRAME_OPTIONS` is `SAMEORIGIN`, not `DENY`**, or the portal cannot frame a
+   module's screens. This breaks in production only — the development server sends
+   no such header, so it passes locally either way.
+6. **Re-run `seed_iam_permissions` on every release** that changed a `registry.py`.
+   Regenerating the manifest does not grant anything; seeding it does.
